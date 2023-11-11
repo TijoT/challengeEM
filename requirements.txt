@@ -4,3 +4,4 @@ entsoe-py
 requests
 requests-mock
 delorean
+pandas
