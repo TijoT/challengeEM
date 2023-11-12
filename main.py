@@ -3,6 +3,9 @@ import pandas as pd
 import requests
 from delorean import parse
 
+from http import HTTPStatus
+from pytz import country_timezones
+
 MeteoJson = dict[str, float | str | int | dict]
 
 cities = {
@@ -24,15 +27,17 @@ cities = {
     }
 }
 
+# moved country code from function level to module level
+country_code = 'ES'
+country_time_zone = [tz for tz in country_timezones[country_code] if 'europe' in tz.lower()][0]
 
-def prepare_forecast(country_code: str, country_time_zone: str) -> None:
+
+def prepare_forecast() -> None:
     """Test data was already generated for country 'Spain' from ENTSO-E API. Timezone of Brussels and Madrid is same.
     Result stored in ./data/forecast.csv. The actual file contains data for the date 2022-10-10
 
     * ENTSO-E platform provide free access to pan-European market data: https://github.com/EnergieID/entsoe-py
     * Country code mapping: https://github.com/EnergieID/entsoe-py/blob/master/entsoe/mappings.py
-
-
     """
 
     client = EntsoePandasClient(api_key="API_KEY")
@@ -45,7 +50,7 @@ def prepare_forecast(country_code: str, country_time_zone: str) -> None:
     wind_solar_forecast_dataframe.to_csv('data/forecast.csv')
 
 
-def get_weather_forecast(time_zone: str, city: str, parameters_to_measure: list[str] | None = None) -> MeteoJson:
+def get_weather_forecast(city: str, parameters_to_measure: list[str] | None = None) -> MeteoJson:
     """
     https://open-meteo.com/en/docs/historical-weather-api
     Hourly weather variable collected with temperature at 2m, wind speed at 10 m
@@ -58,9 +63,12 @@ def get_weather_forecast(time_zone: str, city: str, parameters_to_measure: list[
     # without time zone
     # https://archive-api.open-meteo.com/v1/era5?latitude={latitude}&longitude={longitude}&start_date=2022-10-09&end_date=2022-10-11&hourly=temperature_2m,windspeed_10m
 
-    (latitude, longitude) = (cities[city]['lat'], cities[city]['long'])
+    try:
+        (latitude, longitude) = (cities[city]['lat'], cities[city]['long'])
+    except Exception as ex:
+        raise Exception(f'Geographical coordinates are not available for the city "{city}"\n{ex}')
 
-    # open meteo has 3 europe timezones: Europe/Berlin, Europe/London, Europe/Moscow. Add mapping for future cities
+    # open meteo has 3 europe timezones: Europe/Berlin, Europe/London, Europe/Moscow. Extend mapping for future cities
     default_europe_timezone = 'Europe/Berlin'
     timezone_mapping = {'Europe/Madrid': default_europe_timezone}
     start_date = '2022-10-09'
@@ -73,10 +81,14 @@ def get_weather_forecast(time_zone: str, city: str, parameters_to_measure: list[
         f"start_date={start_date}",
         f"end_date={end_date}",
         f"hourly={','.join(parameters_to_measure)}",
-        f"timezone={timezone_mapping.get(time_zone, default_europe_timezone).replace('/', '%2F')}"
+        f"timezone={timezone_mapping.get(country_time_zone, default_europe_timezone).replace('/', '%2F')}"
     ])
 
     weather_history_response: requests.Response = requests.get(url)
+
+    if weather_history_response.status_code != HTTPStatus.OK:
+        raise Exception(f'Response to the api request is "{weather_history_response}" for the request url: {url}')
+
     weather_history: dict = weather_history_response.json()
     return weather_history
 
@@ -99,14 +111,16 @@ def enhance_generation_forecast(forecast: MeteoJson, parameters_to_measure: list
     entsoe_wind_solar_dataframe['temperature'] = None
     entsoe_wind_solar_dataframe['windspeed'] = None
 
+    if not parameters_to_measure or all(['temperature' in parameters_to_measure, 'windspeed' in parameters_to_measure]):
+        raise Exception(f'Expected physical parameters "temperature", "windspeed" '
+                        f'are not present in input argument "{parameters_to_measure}"')
+
     # iterate time from 2022-10-09 00:00 to 2022-10-11 23:00
     for index, date_time in enumerate(forecast['hourly']['time']):
         # TODO there seems to be a subtle bug here regarding
         #  https://delorean.readthedocs.io/en/latest/quickstart.html#ambiguous-cases
 
         modified_meteo_datetime: str | None
-
-        # Prefer python standard libraries than separate packages
         if 'iso' in (meteo_timestamp_format := forecast['hourly_units']['time']).lower():
             # format is YYYY-MM-DDTHH:MM:SS
             year_first = True
@@ -122,28 +136,28 @@ def enhance_generation_forecast(forecast: MeteoJson, parameters_to_measure: list
         else:
             raise Exception(f'Timestamp format conversion is not handled for "{meteo_timestamp_format}"')
 
+        # Check time formats are same
+
         # TODO for good forecast of wind generation we should take the wind speed at 100m instead,
         #  turbines are way taller than 10m.
         if modified_meteo_datetime in entsoe_wind_solar_dataframe.index:
             # assign temperature to entsoe dataframe
+            temperature_parameter = [param for param in parameters_to_measure if 'temperature' in param.lower()][0]
             entsoe_wind_solar_dataframe.loc[[modified_meteo_datetime], ['temperature']] \
-                = forecast['hourly']['temperature_2m'][index]
+                = forecast['hourly'][temperature_parameter][index]
 
             # assign wind speed to entsoe dataframe
+            wind_parameter = [param for param in parameters_to_measure if 'windspeed' in param.lower()][0]
             entsoe_wind_solar_dataframe.loc[[modified_meteo_datetime], ['windspeed']] \
-                = forecast['hourly']['windspeed_10m'][index]
+                = forecast['hourly'][wind_parameter][index]
 
     # fill NaN values with zeroes
     entsoe_wind_solar_dataframe = entsoe_wind_solar_dataframe.fillna(0)
-    entsoe_wind_solar_dataframe.to_csv('data/result_windSpeed10m.csv')
+    entsoe_wind_solar_dataframe.to_csv('data/result.csv')
 
 
 if __name__ == '__main__':
-    from pytz import country_timezones
-
-    # moved country code from function level to main
-    country_code = 'ES'
-    country_time_zone = [tz for tz in country_timezones[country_code] if 'europe' in tz.lower()][0]
-    hourly_parameters = ['temperature_2m', 'windspeed_10m']
-    forecast = get_weather_forecast(country_time_zone, 'Madrid', hourly_parameters)
-    enhance_generation_forecast(forecast)
+    forecast_city = 'Madrid'
+    hourly_parameters = ['temperature_2m', 'windspeed_100m']
+    forecast = get_weather_forecast(forecast_city, hourly_parameters)
+    enhance_generation_forecast(forecast, hourly_parameters)
