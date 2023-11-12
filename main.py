@@ -79,10 +79,17 @@ def get_weather_forecast(city: str, parameters_to_measure: list[str] | None = No
         f"latitude={latitude}",
         f"longitude={longitude}",
         f"start_date={start_date}",
-        f"end_date={end_date}",
-        f"hourly={','.join(parameters_to_measure)}",
-        f"timezone={timezone_mapping.get(country_time_zone, default_europe_timezone).replace('/', '%2F')}"
+        f"end_date={end_date}"
     ])
+
+    if parameters_to_measure:
+        url = "&".join([
+            url,
+            f"hourly={','.join(parameters_to_measure)}"])
+
+    url = "&".join([
+        url,
+        f"timezone={timezone_mapping.get(country_time_zone, default_europe_timezone).replace('/', '%2F')}"])
 
     weather_history_response: requests.Response = requests.get(url)
 
