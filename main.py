@@ -27,6 +27,7 @@ cities = {
     }
 }
 
+
 # moved country code from function level to module level
 country_code = 'ES'
 country_time_zone = [tz for tz in country_timezones[country_code] if 'europe' in tz.lower()][0]
@@ -100,7 +101,7 @@ def get_weather_forecast(city: str, parameters_to_measure: list[str] | None = No
     return weather_history
 
 
-def enhance_generation_forecast(forecast: MeteoJson, parameters_to_measure: list[str] | None = None):
+def enhance_generation_forecast(city: str, forecast: MeteoJson, parameters_to_measure: list[str] | None = None):
     """Compare historical weather api of entsoe with Open-Meteo and add the missing api data to entsoe.
 
     Original implementation:
@@ -158,13 +159,15 @@ def enhance_generation_forecast(forecast: MeteoJson, parameters_to_measure: list
             entsoe_wind_solar_dataframe.loc[[modified_meteo_datetime], ['windspeed']] \
                 = forecast['hourly'][wind_parameter][index]
 
-    # fill NaN values with zeroes
-    entsoe_wind_solar_dataframe = entsoe_wind_solar_dataframe.fillna(0)
-    entsoe_wind_solar_dataframe.to_csv('data/result.csv')
+    # fill NaN values with zeroes --> .fillna(0)
+    # Deprecated method entsoe_wind_solar_dataframe.fillna(method="pad")
+    entsoe_wind_solar_dataframe = entsoe_wind_solar_dataframe.ffill()
+    entsoe_wind_solar_dataframe.to_csv(f'data/result_{city}.csv')ö
 
 
 if __name__ == '__main__':
-    forecast_city = 'Madrid'
-    hourly_parameters = ['temperature_2m', 'windspeed_100m']
-    forecast = get_weather_forecast(forecast_city, hourly_parameters)
-    enhance_generation_forecast(forecast, hourly_parameters)
+    # forecast_city = 'Madrid'
+    for city in cities:
+        hourly_parameters = ['temperature_2m', 'windspeed_100m']
+        forecast = get_weather_forecast(city, hourly_parameters)
+        enhance_generation_forecast(city, forecast, hourly_parameters)
